@@ -1,0 +1,14 @@
+
+State Machine - |ExceptionHandler|prep_step
+Name prep_step.00 prep_step.10 prep_step.01 
+prep_step.00 0 0 0 
+prep_step.01 1 0 1 
+prep_step.10 1 1 0 
+
+State Machine - |ExceptionHandler|current_state
+Name current_state.RESTORE current_state.HANDLE current_state.PREPARE current_state.IDLE current_state.CSR_ACCESS 
+current_state.IDLE 0 0 0 0 0 
+current_state.PREPARE 0 0 1 1 0 
+current_state.HANDLE 0 1 0 1 0 
+current_state.RESTORE 1 0 0 1 0 
+current_state.CSR_ACCESS 0 0 0 1 1 

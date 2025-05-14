@@ -1,0 +1,213 @@
+module ExceptionHandler(
+    input  wire        clk,
+    input  wire        rst,
+
+    // Señales de excepción
+    input  wire        exception,
+    input  wire        mret,
+    input  wire [31:0] mcause_in,
+    input  wire [31:0] pc_actual,
+
+    // Señales de "instrucción CSR" desde un decodificador o testbench
+    input  wire        csr_op_valid, // hay una operación CSR
+    input  wire        csr_op_write, // 1=escritura, 0=lectura
+    input  wire [11:0] csr_op_addr,  
+    input  wire [31:0] csr_op_wdata,
+    output reg  [31:0] csr_op_rdata,
+    output reg         csr_op_done,  // indica que ya se completó la op. CSR
+
+    // Bandera de monitoreo
+    output reg         exception_handling_flag
+);
+
+    // ----------------------------------------------------
+    // 1) Máquina de estados
+    // ----------------------------------------------------
+    parameter IDLE       = 3'b000,
+              PREPARE    = 3'b001,
+              HANDLE     = 3'b010,
+              RESTORE    = 3'b011,
+              CSR_ACCESS = 3'b100;
+
+    reg [2:0] current_state, next_state;
+
+    // ----------------------------------------------------
+    // 2) Interfaz hacia CSRFile (un solo puerto)
+    // ----------------------------------------------------
+    reg  [11:0] csr_addr;
+    reg  [31:0] csr_wdata;
+    reg         csr_write;
+    reg  [31:0] csr_set;
+    reg         csr_set_valid;
+    wire [31:0] csr_rdata;
+
+    // ----------------------------------------------------
+    // 3) Salidas del CSRFile
+    //    (en un diseño real, el hardware que detecta la excepción
+    //     suele escribir estos registros automáticamente)
+    // ----------------------------------------------------
+    wire [31:0] mstatus;
+    wire [31:0] mie;
+    wire [31:0] mtvec;
+    wire [31:0] mepc;
+    wire [31:0] mcause;
+    wire [31:0] mip;
+
+    // ----------------------------------------------------
+    // Instanciar el CSRFile
+    // ----------------------------------------------------
+    CSRFile u_csrfile (
+        .clk           (clk),
+        .rst           (rst),
+        .csr_addr      (csr_addr),
+        .csr_wdata     (csr_wdata),
+        .csr_write     (csr_write),
+        .csr_rdata     (csr_rdata),
+
+        .csr_set       (csr_set),
+        .csr_set_valid (csr_set_valid),
+
+        .mstatus       (mstatus),
+        .mie           (mie),
+        .mtvec         (mtvec),
+        .mepc          (mepc),
+        .mcause        (mcause),
+        .mip           (mip)
+    );
+
+    // ----------------------------------------------------
+    // 4) Registrar estado
+    // ----------------------------------------------------
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            current_state <= IDLE;
+        else
+            current_state <= next_state;
+    end
+
+    // ----------------------------------------------------
+    // 5) Lógica combinacional de próximo estado
+    // ----------------------------------------------------
+    always @(*) begin
+        case (current_state)
+            IDLE: begin
+                if (exception)
+                    next_state = PREPARE;
+                else if (csr_op_valid) 
+                    next_state = CSR_ACCESS; 
+                else
+                    next_state = IDLE;
+            end
+
+            PREPARE: begin
+                // Cuando terminemos de escribir mcause, mepc, etc., pasamos a HANDLE
+                next_state = HANDLE;
+            end
+
+            HANDLE: begin
+                if (mret)
+                    next_state = RESTORE;
+                else
+                    next_state = HANDLE;
+            end
+
+            RESTORE: begin
+                // Tras restaurar, volvemos a IDLE
+                next_state = IDLE;
+            end
+
+            CSR_ACCESS: begin
+                // Tras completar la operación CSR, volvemos a IDLE 
+                // (a menos que diseñes otra secuencia más larga).
+                next_state = IDLE;
+            end
+
+            default: next_state = IDLE;
+        endcase
+    end
+
+    // ----------------------------------------------------
+    // 6) Señales por defecto para la interfaz a CSRFile
+    // ----------------------------------------------------
+    always @(*) begin
+        // Por defecto, no escribimos nada.
+        csr_addr      = 12'h0;
+        csr_wdata     = 32'h0;
+        csr_write     = 1'b0;
+        csr_set       = 32'h0;
+        csr_set_valid = 1'b0;
+
+        // Por defecto, no tenemos datos para la operación CSR
+        csr_op_done   = 1'b0;
+        csr_op_rdata  = 32'h0;
+    end
+
+    // ----------------------------------------------------
+    // 7) Lógica secuencial: comportamiento por estado
+    // ----------------------------------------------------
+    always @(posedge clk or posedge rst) begin
+        if (rst) begin
+            exception_handling_flag <= 1'b0;
+        end
+        else begin
+            case (current_state)
+                IDLE: begin
+                    exception_handling_flag <= 1'b0;
+                end
+
+                PREPARE: begin
+                    // Ejemplo: 1) mcause = mcause_in
+                    csr_addr  <= 12'h342; // mcause
+                    csr_wdata <= mcause_in;
+                    csr_write <= 1'b1;
+
+                    // 2) mepc = pc_actual (podrías requerir 1 ciclo adicional)
+                    // Por simplicidad en este ejemplo, lo dejamos en el mismo ciclo
+                    // (pero en hardware real, deberías secuenciarlo en varios ciclos 
+                    //  si solo tienes un puerto).
+                    // "Engañosamente" se vería sobrescrito, a menos que lo manejes
+                    //  en subestados. Para demos, lo dejamos simple:
+                    // mepc
+                    // ...
+                    // etc.
+
+                    // forzamos MIE=0 en mstatus (bit 3), lo ideal: subestados
+                    // ...
+                end
+
+                HANDLE: begin
+                    // Mientras manejas la excepción
+                    exception_handling_flag <= 1'b1;
+                end
+
+                RESTORE: begin
+                    // Restaurar MIE (bit 3) desde MPIE (bit 7) en mstatus
+                    // Ejemplo muy simple (en un ciclo)
+                    // En la práctica, iría en varios ciclos o con subestados.
+
+                    // Apagamos bandera de excepción
+                    exception_handling_flag <= 1'b0;
+                end
+
+                CSR_ACCESS: begin
+                    // Realizar la operación solicitada por csr_op_valid
+                    // 1) Configurar señales a CSRFile
+                    csr_addr  <= csr_op_addr;
+                    csr_write <= csr_op_write;
+                    csr_wdata <= csr_op_wdata;
+
+                    // 2) Si es lectura, capturamos csr_rdata
+                    if (!csr_op_write) begin
+                        csr_op_rdata <= csr_rdata;
+                    end
+
+                    // 3) Señalamos que terminamos en este ciclo
+                    csr_op_done <= 1'b1;
+                end
+
+                default: ;
+            endcase
+        end
+    end
+
+endmodule
